@@ -15,7 +15,6 @@ import java.util.Map;
 
 import org.infinispan.protostream.ImmutableSerializationContext;
 import org.infinispan.protostream.ProtobufTagMarshaller;
-import org.infinispan.protostream.ProtobufUtil;
 import org.infinispan.protostream.TagWriter;
 import org.infinispan.protostream.descriptors.WireType;
 
@@ -66,9 +65,13 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
    }
 
    public static TagWriterImpl newInstance(ImmutableSerializationContext serCtx, OutputStream output) {
-      return new TagWriterImpl((SerializationContextImpl) serCtx, new OutputStreamEncoder(output, ProtobufUtil.DEFAULT_STREAM_BUFFER_SIZE));
+      return new TagWriterImpl((SerializationContextImpl) serCtx, new OutputStreamNoBufferEncoder(output));
    }
 
+   /**
+    * @deprecated since 4.6.3 Please use {@link #newInstance(ImmutableSerializationContext, OutputStream)} with a {@link java.io.BufferedOutputStream instead}
+    */
+   @Deprecated
    public static TagWriterImpl newInstance(ImmutableSerializationContext serCtx, OutputStream output, int bufferSize) {
       return new TagWriterImpl((SerializationContextImpl) serCtx, new OutputStreamEncoder(output, bufferSize));
    }
@@ -105,16 +108,6 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
    }
 
    @Override
-   public void writeTag(int number, int wireType) throws IOException {
-      encoder.writeVarint32(WireType.makeTag(number, wireType));
-   }
-
-   @Override
-   public void writeTag(int number, WireType wireType) throws IOException {
-      encoder.writeVarint32(WireType.makeTag(number, wireType));
-   }
-
-   @Override
    public void writeVarint32(int value) throws IOException {
       encoder.writeVarint32(value);
    }
@@ -137,33 +130,13 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
    }
 
    @Override
-   public void writeInt32(int number, int value) throws IOException {
-      if (value >= 0) {
-         encoder.writeUInt32Field(number, value);
-      } else {
-         encoder.writeUInt64Field(number, value);
-      }
-   }
-
-   @Override
    public void writeUInt32(int number, int value) throws IOException {
       encoder.writeUInt32Field(number, value);
    }
 
    @Override
-   public void writeSInt32(int number, int value) throws IOException {
-      // Roll the bits in order to move the sign bit from position 31 to position 0, to reduce the wire length of negative numbers.
-      encoder.writeUInt32Field(number, (value << 1) ^ (value >> 31));
-   }
-
-   @Override
    public void writeFixed32(int number, int value) throws IOException {
       encoder.writeFixed32Field(number, value);
-   }
-
-   @Override
-   public void writeSFixed32(int number, int value) throws IOException {
-      writeFixed32(number, value);
    }
 
    @Override
@@ -177,24 +150,8 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
    }
 
    @Override
-   public void writeSInt64(int number, long value) throws IOException {
-      // Roll the bits in order to move the sign bit from position 63 to position 0, to reduce the wire length of negative numbers.
-      encoder.writeUInt64Field(number, (value << 1) ^ (value >> 63));
-   }
-
-   @Override
    public void writeFixed64(int number, long value) throws IOException {
       encoder.writeFixed64Field(number, value);
-   }
-
-   @Override
-   public void writeSFixed64(int number, long value) throws IOException {
-      writeFixed64(number, value);
-   }
-
-   @Override
-   public void writeEnum(int number, int value) throws IOException {
-      writeInt32(number, value);
    }
 
    @Override
@@ -203,24 +160,9 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
    }
 
    @Override
-   public void writeDouble(int number, double value) throws IOException {
-      encoder.writeFixed64Field(number, Double.doubleToRawLongBits(value));
-   }
-
-   @Override
-   public void writeFloat(int number, float value) throws IOException {
-      encoder.writeFixed32Field(number, Float.floatToRawIntBits(value));
-   }
-
-   @Override
    public void writeBytes(int number, ByteBuffer value) throws IOException {
       encoder.writeLengthDelimitedField(number, value.remaining());
       encoder.writeBytes(value);
-   }
-
-   @Override
-   public void writeBytes(int number, byte[] value) throws IOException {
-      writeBytes(number, value, 0, value.length);
    }
 
    @Override
@@ -810,7 +752,9 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
 
    /**
     * Writes to an {@link OutputStream} and performs internal buffering to minimize the number of stream writes.
+    * @Deprecated this is to be removed in next major
     */
+   @Deprecated
    private static final class OutputStreamEncoder extends Encoder {
 
       private final ByteArrayEncoder buffer;
