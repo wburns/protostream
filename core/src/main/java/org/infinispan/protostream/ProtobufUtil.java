@@ -143,7 +143,7 @@ public final class ProtobufUtil {
    }
 
    public static byte[] toWrappedByteArray(ImmutableSerializationContext ctx, Object t, int bufferSize) throws IOException {
-      ByteArrayOutputStream baos = new ByteArrayOutputStream(bufferSize);
+      ByteArrayOutputStream baos = new ByteArrayOutputStreamEx(bufferSize);
       WrappedMessage.write(ctx, TagWriterImpl.newInstanceNoBuffer(ctx, baos), t);
       return baos.toByteArray();
    }

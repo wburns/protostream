@@ -10,6 +10,7 @@ import java.nio.BufferOverflowException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -108,6 +109,11 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
    }
 
    @Override
+   public void close() throws IOException {
+      encoder.close();
+   }
+
+   @Override
    public void writeVarint32(int value) throws IOException {
       encoder.writeVarint32(value);
    }
@@ -169,6 +175,31 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
    public void writeBytes(int number, byte[] value, int offset, int length) throws IOException {
       encoder.writeLengthDelimitedField(number, length);
       encoder.writeBytes(value, offset, length);
+   }
+
+   @Override
+   public TagWriter subWriter(int number) throws IOException {
+      // This branch is much better for larger arrays but the other is faster for smaller ones
+      // TODO: maybe do this based on message types?
+      if (encoder.supportsFixedVarint()) {
+         writeVarint32(WireType.makeTag(number, WireType.WIRETYPE_LENGTH_DELIMITED));
+         return new TagWriterImpl(serCtx, new FixedVarintWrappedEncoder((FixedVarintEncoder) encoder));
+      }
+      int space = bytesAvailableForVariableEncoding(encoder.remainingSpace());
+      return new TagWriterImpl(serCtx, new ArrayBasedWrappedEncoder(space, encoder, number));
+   }
+
+   // Returns how many bytes are usable for data from a given range of bytes when inserting a variable int before
+   // the actual data
+   private int bytesAvailableForVariableEncoding(int spaceAllowed) {
+      if (spaceAllowed < 128) {
+         return spaceAllowed - 1;
+      } else if (spaceAllowed < 16384) {
+         return spaceAllowed - 2;
+      } else if (spaceAllowed < 2097151) {
+         return spaceAllowed - 3;
+      }
+      return spaceAllowed - (spaceAllowed < 268435455 ? 4 : 5);
    }
 
    @Override
@@ -248,6 +279,14 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
       void flush() throws IOException {
       }
 
+      void close() throws IOException {
+         flush();
+      }
+
+      int remainingSpace() {
+         return Integer.MAX_VALUE;
+      }
+
       // high level ops, writing fields
 
       void writeUInt32Field(int fieldNumber, int value) throws IOException {
@@ -295,6 +334,20 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
       abstract void writeBytes(byte[] value, int offset, int length) throws IOException;
 
       abstract void writeBytes(ByteBuffer value) throws IOException;
+
+      boolean supportsFixedVarint() {
+         return false;
+      }
+   }
+
+   abstract static class FixedVarintEncoder extends Encoder {
+      abstract int skipFixedVarint();
+
+      abstract void writePositiveFixedVarint(int pos);
+      @Override
+      boolean supportsFixedVarint() {
+         return true;
+      }
    }
 
    /**
@@ -367,7 +420,7 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
    /**
     * Writes to a user provided byte array.
     */
-   private static class ByteArrayEncoder extends Encoder {
+   private static class ByteArrayEncoder extends FixedVarintEncoder {
 
       private final byte[] array;
 
@@ -399,6 +452,7 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
          this.pos = offset;
       }
 
+      @Override
       protected final int remainingSpace() {
          return limit - pos;
       }
@@ -536,6 +590,26 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
             throw log.outOfWriteBufferSpace(e);
          }
       }
+
+      @Override
+      int skipFixedVarint() {
+         int prev = pos;
+         pos += 5;
+         return prev;
+      }
+
+      @Override
+      void writePositiveFixedVarint(int pos) {
+         TagWriterImpl.writePositiveFixedVarint(array, pos, this.pos - pos - 5);
+      }
+   }
+
+   public static void writePositiveFixedVarint(byte[] array, int pos, int length) {
+      array[pos++] = (byte) (length & 0x7F | 0x80);
+      array[pos++] = (byte) ((length >>> 7) & 0x7F | 0x80);
+      array[pos++] = (byte) ((length >>> 14) & 0x7F | 0x80);
+      array[pos++] = (byte) ((length >>> 21) & 0x7F | 0x80);
+      array[pos] = (byte) ((length >>> 28) & 0x7F);
    }
 
    /**
@@ -664,7 +738,7 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
       }
    }
 
-   private static class OutputStreamNoBufferEncoder extends Encoder {
+   private static class OutputStreamNoBufferEncoder extends FixedVarintEncoder {
 
       private final OutputStream out;
 
@@ -747,6 +821,21 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
       void flush() throws IOException {
          super.flush();
          out.flush();
+      }
+
+      @Override
+      int skipFixedVarint() {
+         return ((ByteArrayOutputStreamEx) out).skipFixedVarint();
+      }
+
+      @Override
+      void writePositiveFixedVarint(int pos) {
+         ((ByteArrayOutputStreamEx) out).writePositiveFixedVarint(pos);
+      }
+
+      @Override
+      boolean supportsFixedVarint() {
+         return out instanceof ByteArrayOutputStreamEx;
       }
    }
 
@@ -864,6 +953,204 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
       @Override
       void flush() throws IOException {
          buffer.flushToStream(out);
+      }
+   }
+
+   private static class FixedVarintWrappedEncoder extends Encoder {
+      private final FixedVarintEncoder parentEncoder;
+      private final int originalPos;
+      private boolean closed;
+
+      private FixedVarintWrappedEncoder(FixedVarintEncoder parentEncoder) {
+         this.parentEncoder = parentEncoder;
+         this.originalPos = parentEncoder.skipFixedVarint();
+      }
+
+      @Override
+      void writeVarint32(int value) throws IOException {
+         parentEncoder.writeVarint32(value);
+      }
+
+      @Override
+      void writeVarint64(long value) throws IOException {
+         parentEncoder.writeVarint64(value);
+      }
+
+      @Override
+      void writeFixed32(int value) throws IOException {
+         parentEncoder.writeFixed32(value);
+      }
+
+      @Override
+      void writeFixed64(long value) throws IOException {
+         parentEncoder.writeFixed64(value);
+      }
+
+      @Override
+      void writeByte(byte value) throws IOException {
+         parentEncoder.writeByte(value);
+      }
+
+      @Override
+      void writeBytes(byte[] value, int offset, int length) throws IOException {
+         parentEncoder.writeBytes(value, offset, length);
+      }
+
+      @Override
+      void writeBytes(ByteBuffer value) throws IOException {
+         parentEncoder.writeBytes(value);
+      }
+
+      @Override
+      void close() throws IOException {
+         if (!closed) {
+            closed = true;
+            parentEncoder.writePositiveFixedVarint(originalPos);
+         }
+      }
+   }
+
+   private static class ArrayBasedWrappedEncoder extends Encoder {
+      private final int maxSize;
+      private final Encoder parentEncoder;
+      private final int number;
+      private int pos = 0;
+      private byte[] bytes;
+      private boolean closed;
+
+      public ArrayBasedWrappedEncoder(int maxSize, Encoder parentEncoder, int number) {
+         this.maxSize = maxSize;
+         this.parentEncoder = parentEncoder;
+         this.number = number;
+         bytes = new byte[Math.min(maxSize, 32)];
+      }
+
+      @Override
+      void writeVarint32(int value) throws IOException {
+         ensureSize(5);
+         try {
+            while (true) {
+               if ((value & 0xFFFFFF80) == 0) {
+                  bytes[pos++] = (byte) value;
+                  break;
+               } else {
+                  bytes[pos++] = (byte) (value & 0x7F | 0x80);
+                  value >>>= 7;
+               }
+            }
+         } catch (IndexOutOfBoundsException e) {
+            throw log.outOfWriteBufferSpace(e);
+         }
+      }
+
+      @Override
+      void writeVarint64(long value) throws IOException {
+         ensureSize(10);
+         try {
+            while (true) {
+               if ((value & 0xFFFFFFFFFFFFFF80L) == 0) {
+                  bytes[pos++] = (byte) value;
+                  break;
+               } else {
+                  bytes[pos++] = (byte) ((int) value & 0x7F | 0x80);
+                  value >>>= 7;
+               }
+            }
+         } catch (IndexOutOfBoundsException e) {
+            throw log.outOfWriteBufferSpace(e);
+         }
+      }
+
+      @Override
+      void writeFixed32(int value) throws IOException {
+         ensureSize(4);
+         try {
+            bytes[pos++] = (byte) (value & 0xFF);
+            bytes[pos++] = (byte) ((value >> 8) & 0xFF);
+            bytes[pos++] = (byte) ((value >> 16) & 0xFF);
+            bytes[pos++] = (byte) ((value >> 24) & 0xFF);
+         } catch (IndexOutOfBoundsException e) {
+            throw log.outOfWriteBufferSpace(e);
+         }
+      }
+
+      @Override
+      void writeFixed64(long value) throws IOException {
+         ensureSize(8);
+         try {
+            bytes[pos++] = (byte) (value & 0xFF);
+            bytes[pos++] = (byte) ((value >> 8) & 0xFF);
+            bytes[pos++] = (byte) ((value >> 16) & 0xFF);
+            bytes[pos++] = (byte) ((value >> 24) & 0xFF);
+            bytes[pos++] = (byte) ((int) (value >> 32) & 0xFF);
+            bytes[pos++] = (byte) ((int) (value >> 40) & 0xFF);
+            bytes[pos++] = (byte) ((int) (value >> 48) & 0xFF);
+            bytes[pos++] = (byte) ((int) (value >> 56) & 0xFF);
+         } catch (IndexOutOfBoundsException e) {
+            throw log.outOfWriteBufferSpace(e);
+         }
+      }
+
+      @Override
+      void writeByte(byte value) throws IOException {
+         ensureSize(1);
+         try {
+            bytes[pos++] = value;
+         } catch (IndexOutOfBoundsException e) {
+            throw log.outOfWriteBufferSpace(e);
+         }
+      }
+
+      @Override
+      void writeBytes(byte[] value, int offset, int length) throws IOException {
+         ensureSize(length);
+         try {
+            System.arraycopy(value, offset, bytes, pos, length);
+            pos += length;
+         } catch (IndexOutOfBoundsException e) {
+            throw log.outOfWriteBufferSpace(e);
+         }
+      }
+
+      @Override
+      void writeBytes(ByteBuffer value) throws IOException {
+         int length = value.remaining();
+         ensureSize(length);
+         if (value.hasArray()) {
+            writeBytes(value.array(), value.arrayOffset() + value.position(), length);
+            value.position(value.position() + length);
+         } else {
+            try {
+               value.get(bytes, pos, length);
+               pos += length;
+            } catch (IndexOutOfBoundsException e) {
+               throw log.outOfWriteBufferSpace(e);
+            }
+         }
+      }
+
+      @Override
+      void close() throws IOException {
+         if (!closed) {
+            closed = true;
+            parentEncoder.writeLengthDelimitedField(number, pos);
+            parentEncoder.writeBytes(bytes, 0, pos);
+         }
+      }
+
+      private void ensureSize(int possibleLength) {
+         int targetSize = pos + possibleLength;
+         int currentSize = bytes.length;
+         while (targetSize > currentSize) {
+            if (currentSize > maxSize) {
+               currentSize = maxSize;
+               break;
+            }
+            currentSize <<= 1;
+         }
+         if (currentSize != bytes.length) {
+            bytes = Arrays.copyOf(bytes, currentSize);
+         }
       }
    }
 }

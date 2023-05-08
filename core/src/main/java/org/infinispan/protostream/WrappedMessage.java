@@ -296,15 +296,13 @@ public final class WrappedMessage {
             if (t.getClass().isEnum()) {
                ((EnumMarshallerDelegate) marshallerDelegate).encode(WRAPPED_ENUM, (Enum) t, out);
             } else {
-               ByteArrayOutputStreamEx buffer = new ByteArrayOutputStreamEx();
-               TagWriterImpl nestedCtx = TagWriterImpl.newInstanceNoBuffer(ctx, buffer);
-               marshallerDelegate.marshall(nestedCtx, null, t);
-               nestedCtx.flush();
-               out.writeBytes(WRAPPED_MESSAGE, buffer.getByteBuffer());
+               TagWriter nestedWriter = out.subWriter(WRAPPED_MESSAGE);
+               marshallerDelegate.marshall((ProtobufTagMarshaller.WriteContext) nestedWriter, null, t);
+               nestedWriter.close();
             }
          }
       }
-      out.flush();
+      out.close();
    }
 
    private static void writeContainer(ImmutableSerializationContext ctx, TagWriter out, BaseMarshallerDelegate marshallerDelegate, Object container) throws IOException {

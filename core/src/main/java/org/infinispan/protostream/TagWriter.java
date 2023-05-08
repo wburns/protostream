@@ -14,6 +14,12 @@ public interface TagWriter extends RawProtoStreamWriter {
    // start low level ops
    void flush() throws IOException;
 
+   /**
+    * Invoke after done with writer, this implies a flush if necessary
+    * It is necessary to invoke this on a writer returned from {@link #subWriter(int)} to actually push the data
+    */
+   void close() throws IOException;
+
    default void writeTag(int number, int wireType) throws IOException {
       writeVarint32(WireType.makeTag(number, wireType));
    }
@@ -90,4 +96,12 @@ public interface TagWriter extends RawProtoStreamWriter {
 
    void writeBytes(int number, byte[] value, int offset, int length) throws IOException;
    // end high level ops
+
+   /**
+    * Used to write a sub message that can be optimized by implementation. When the sub writer is complete, flush
+    * should be invoked to ensure
+    * @return
+    * @throws IOException
+    */
+   TagWriter subWriter(int number) throws IOException;
 }
