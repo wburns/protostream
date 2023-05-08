@@ -296,7 +296,7 @@ public final class WrappedMessage {
             if (t.getClass().isEnum()) {
                ((EnumMarshallerDelegate) marshallerDelegate).encode(WRAPPED_ENUM, (Enum) t, out);
             } else {
-               TagWriter nestedWriter = out.subWriter(WRAPPED_MESSAGE);
+               TagWriter nestedWriter = out.subWriter(WRAPPED_MESSAGE, false);
                marshallerDelegate.marshall((ProtobufTagMarshaller.WriteContext) nestedWriter, null, t);
                nestedWriter.close();
             }

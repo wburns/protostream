@@ -19,6 +19,7 @@ import org.infinispan.protostream.ProtobufTagMarshaller;
 import org.infinispan.protostream.TagWriter;
 import org.infinispan.protostream.descriptors.WireType;
 
+
 /**
  * @author anistor@redhat.com
  * @since 3.0
@@ -178,15 +179,17 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
    }
 
    @Override
-   public TagWriter subWriter(int number) throws IOException {
+   public TagWriter subWriter(int number, boolean nested) throws IOException {
       // This branch is much better for larger arrays but the other is faster for smaller ones
       // TODO: maybe do this based on message types?
       if (encoder.supportsFixedVarint()) {
          writeVarint32(WireType.makeTag(number, WireType.WIRETYPE_LENGTH_DELIMITED));
-         return new TagWriterImpl(serCtx, new FixedVarintWrappedEncoder((FixedVarintEncoder) encoder));
+         return nested ? new TagWriterImpl(this, new FixedVarintWrappedEncoder((FixedVarintEncoder) encoder)) :
+               new TagWriterImpl(serCtx, new FixedVarintWrappedEncoder((FixedVarintEncoder) encoder));
       }
       int space = bytesAvailableForVariableEncoding(encoder.remainingSpace());
-      return new TagWriterImpl(serCtx, new ArrayBasedWrappedEncoder(space, encoder, number));
+      return nested ? new TagWriterImpl(this, new ArrayBasedWrappedEncoder(space, encoder, number)) :
+            new TagWriterImpl(serCtx, new ArrayBasedWrappedEncoder(space, encoder, number));
    }
 
    // Returns how many bytes are usable for data from a given range of bytes when inserting a variable int before

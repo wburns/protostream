@@ -103,5 +103,5 @@ public interface TagWriter extends RawProtoStreamWriter {
     * @return
     * @throws IOException
     */
-   TagWriter subWriter(int number) throws IOException;
+   TagWriter subWriter(int number, boolean nested) throws IOException;
 }
